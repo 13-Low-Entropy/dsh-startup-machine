@@ -1,0 +1,926 @@
+/* ============================================================================
+ * dsh-startup-machine — 启动动画视觉层
+ * ----------------------------------------------------------------------------
+ * 风格基线：dsh-theme-machine（THE MACHINE / 疑犯追踪 监控终端）
+ *   · 底色纯黑 #000、机器白 #f2f2f2 是唯一「数据色」（1.6.2 起由深蓝黑改黑）
+ *   · 标题用 开源鸿蒙 Sans（HarmonyOS Sans SC），终端数据仍用等宽
+ *   · 全大写 + 0.2–0.3em 宽字距、字幕逐字输入 + 块状光标
+ *   · 锁定框 = 四角括号（不用完整 border），虚线表示「采集中」
+ *   · 颜色即判断：白=中性 / 琥珀=分析中 / 红=告警 / 青白=已锁定
+ * 所有尺寸走 vmin/clamp，全屏任意窗口比例都不塌。
+ * ========================================================================== */
+
+/* 首屏锁滚动：Host 的 critical css 与自举两条路都要靠这条兜底 */
+html.ms-lock,
+html.ms-lock body {
+  overflow: hidden !important;
+}
+
+#machine-startup-root.ms-root {
+  --ms-bg: #000;
+  --ms-bg-1: #050505;
+  --ms-bg-2: #0a0a0a;
+  --ms-bg-3: #111111;
+  --ms-line: #171717;
+  --ms-line-2: #212121;
+  --ms-line-3: #2e2e2e;
+  --ms-fg: #f2f2f2;
+  --ms-fg-dim: #969696;
+  --ms-fg-mute: #4f4f4f;
+
+  /* 三个可配置色由 JS 写到 style 上，这里只给兜底 */
+  --ms-accent: #f2f2f2;   /* 机器白：锁定 / 通过 */
+  --ms-warn: #d9a406;     /* 琥珀：分析中 */
+  --ms-alert: #e5484d;    /* 砖红：告警 / 匹配命中闪一下 */
+
+  /* 正文/标题：开源鸿蒙 Sans（用户机器上已安装 HarmonyOS_Sans_SC_*.ttf）。
+     没装就按 Noto / 思源 / 雅黑 的顺序回落，字形不会崩。 */
+  --ms-sans: "HarmonyOS Sans SC", "HarmonyOS Sans", "HarmonyOS Sans SC Medium",
+    "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei UI", "PingFang SC",
+    system-ui, sans-serif;
+
+  --ms-mono: "JetBrains Mono", "Cascadia Mono", Consolas, "Courier New",
+    "Noto Sans Mono CJK SC", "Microsoft YaHei UI", "PingFang SC", monospace;
+
+  /* 人脸取景框（归一化，相对 camview）：JS 可覆盖 */
+  --ms-face-x: 50%;
+  --ms-face-y: 46%;
+  --ms-face-w: 34%;
+  --ms-face-h: 42%;
+
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: block;
+  overflow: hidden;
+  background: var(--ms-bg);
+  color: var(--ms-fg);
+  font-family: var(--ms-sans);
+  font-size: 13px;
+  letter-spacing: .04em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+  opacity: 1;
+  transition: opacity .42s ease;
+  animation: ms-bootin .35s ease both;
+}
+
+/* 等宽只留给「机器自己说话」的地方：日志、遥测、时钟、编号、取景框读数 */
+#machine-startup-root.ms-root .ms-rail,
+#machine-startup-root.ms-root .ms-bootlist,
+#machine-startup-root.ms-root .ms-bootlog,
+#machine-startup-root.ms-root .ms-telog,
+#machine-startup-root.ms-root .ms-clock,
+#machine-startup-root.ms-root .ms-camfoot,
+#machine-startup-root.ms-root .ms-kv,
+#machine-startup-root.ms-root .ms-brand,
+#machine-startup-root.ms-root .ms-bottomrow,
+#machine-startup-root.ms-root .ms-dossier-tag,
+#machine-startup-root.ms-root .ms-sub-en,
+#machine-startup-root.ms-root .ms-skip {
+  font-family: var(--ms-mono);
+}
+#machine-startup-root.ms-root.ms-out {
+  opacity: 0;
+  pointer-events: none;
+}
+#machine-startup-root.ms-root *,
+#machine-startup-root.ms-root *::before,
+#machine-startup-root.ms-root *::after {
+  box-sizing: border-box;
+}
+#machine-startup-root.ms-root button {
+  font-family: inherit;
+}
+
+@keyframes ms-bootin { from { opacity: 0 } to { opacity: 1 } }
+
+/* ── 氛围层：噪点 / 扫描线 / 扫掠光 / 暗角 ─────────────────────────────── */
+.ms-atmos {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.ms-grain {
+  position: absolute;
+  inset: -20%;
+  opacity: .032;
+  background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  animation: ms-grainmove 1.1s steps(3) infinite;
+}
+@keyframes ms-grainmove {
+  0%   { transform: translate3d(0, 0, 0) }
+  33%  { transform: translate3d(-2%, 1.5%, 0) }
+  66%  { transform: translate3d(1.5%, -2%, 0) }
+  100% { transform: translate3d(0, 0, 0) }
+}
+.ms-scanlines {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg,
+      rgba(255, 255, 255, .016) 0 1px,
+      transparent 1px 3px);
+}
+.ms-sweep {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -30vh;
+  height: 22vh;
+  background: linear-gradient(180deg,
+      transparent,
+      rgba(255, 255, 255, .038),
+      transparent);
+  /* 只动 transform：交给合成器插值，不触发 layout/paint。
+     这一层原来 animate 的是 top —— 全屏宽度、每帧重排，是这套动画里最贵的一笔。 */
+  will-change: transform;
+  animation: ms-sweep 7.5s linear infinite;
+}
+@keyframes ms-sweep {
+  from { transform: translate3d(0, 0, 0) }
+  to   { transform: translate3d(0, 140vh, 0) }
+}
+.ms-vignette {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 48%, transparent 42%, rgba(0, 0, 0, .55) 100%),
+    linear-gradient(180deg, rgba(0, 0, 0, .5), transparent 22%, transparent 78%, rgba(0, 0, 0, .55));
+}
+/* 细网格，只在四角隐约可见 */
+.ms-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, .018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, .018) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(ellipse at 50% 45%, #000 8%, transparent 72%);
+  mask-image: radial-gradient(ellipse at 50% 45%, #000 8%, transparent 72%);
+}
+
+/* ── 画框四角刻度 ──────────────────────────────────────────────────────── */
+.ms-frame {
+  position: absolute;
+  inset: 18px;
+  pointer-events: none;
+}
+.ms-tick {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--ms-line-3);
+  opacity: .9;
+}
+.ms-tick-tl { top: 0; left: 0; border-right: 0; border-bottom: 0 }
+.ms-tick-tr { top: 0; right: 0; border-left: 0; border-bottom: 0 }
+.ms-tick-bl { bottom: 0; left: 0; border-right: 0; border-top: 0 }
+.ms-tick-br { bottom: 0; right: 0; border-left: 0; border-top: 0 }
+
+/* ── 顶部条 ─────────────────────────────────────────────────────────────── */
+.ms-top {
+  position: absolute;
+  top: 30px;
+  left: 40px;
+  right: 40px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  z-index: 6;
+}
+.ms-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  letter-spacing: .28em;
+  text-transform: uppercase;
+  color: var(--ms-fg-dim);
+}
+.ms-brand-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ms-accent);
+  box-shadow: 0 0 10px var(--ms-accent);
+  animation: ms-blink 2.4s ease-in-out infinite;
+}
+@keyframes ms-blink { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
+.ms-brand-name { color: var(--ms-fg); letter-spacing: .3em }
+.ms-brand-sep { width: 16px; height: 1px; background: var(--ms-line-3) }
+.ms-brand-sub { font-size: 10px; color: var(--ms-fg-mute) }
+
+.ms-topright {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.ms-clock {
+  font-size: 11px;
+  letter-spacing: .18em;
+  color: var(--ms-fg-mute);
+  font-variant-numeric: tabular-nums;
+}
+.ms-skip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--ms-line-3);
+  background: rgba(10, 10, 10, .72);
+  color: var(--ms-fg);
+  font-size: 10px;
+  letter-spacing: .24em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color .2s, background .2s, transform .12s;
+}
+.ms-skip:hover {
+  border-color: var(--ms-accent);
+  background: rgba(255, 255, 255, .08);
+}
+.ms-skip:active { transform: translateY(1px) }
+.ms-skip kbd {
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: .12em;
+  padding: 2px 5px;
+  border: 1px solid var(--ms-line-2);
+  color: var(--ms-fg-mute);
+  border-radius: 2px;
+}
+.ms-skip.ms-hidden { display: none }
+
+/* ── 舞台与幕 ───────────────────────────────────────────────────────────── */
+.ms-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 84px 48px 132px;
+  z-index: 4;
+}
+.ms-act {
+  position: absolute;
+  inset: 84px 48px 132px;
+  contain: layout style;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 22px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(10px);
+  transition: opacity .34s ease, transform .34s ease, visibility .34s;
+  pointer-events: none;
+}
+.ms-act.on {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+
+/* ── 第一幕：标题卡（参考《疑犯追踪》片头那种「一句话 + 角落代码」） ──────
+   两块内容：左上角很暗的一列系统名 + 中间一行大字与它的中文。
+   这一幕同时把其余 HUD 装饰全部收掉（见文件末尾 .ms-act1 规则），
+   只留纯黑底和字 —— 靠留白和字距撑住，不靠网格线。 */
+.ms-act[data-act="boot"] {
+  gap: 0;
+}
+.ms-bootlist {
+  position: absolute;
+  left: clamp(28px, 5.5vw, 96px);
+  top: clamp(56px, 9.5vh, 108px);
+  margin: 0;
+  font-size: clamp(8.5px, 1.05vmin, 11px);
+  line-height: 1.62;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: #333333;
+  white-space: pre;
+  pointer-events: none;
+  /* 刻意压到「几乎看不见」：它是背景纹理，不是正文 */
+  animation: ms-rise .8s .1s ease both;
+}
+.ms-bootlist b {
+  display: block;
+  font-weight: 400;
+  color: #565656;
+}
+/* 第一幕的实时自检行（KERNEL / NODES / FEEDS / CAMERA） */
+.ms-bootlog {
+  position: absolute;
+  left: clamp(28px, 5.5vw, 96px);
+  bottom: clamp(88px, 15vh, 150px);
+  min-height: 4.6em;
+  font-size: clamp(8.5px, 1.05vmin, 11px);
+  line-height: 1.72;
+  letter-spacing: .12em;
+  color: var(--ms-fg-mute);
+  pointer-events: none;
+}
+.ms-bootlog .ms-l {
+  display: flex;
+  align-items: baseline;
+  opacity: 0;
+  animation: ms-linin .22s ease forwards;
+}
+.ms-bootlog .ms-l b {
+  color: var(--ms-fg-dim);
+  font-weight: 400;
+  white-space: nowrap;
+}
+/* dot leader：POWER ..... 120V AC OK */
+.ms-bootlog .ms-l b::after {
+  content: "";
+  display: inline-block;
+  width: 4.6em;
+  margin: 0 .9em;
+  border-bottom: 1px dotted rgba(255, 255, 255, .22);
+  transform: translateY(-.3em);
+}
+.ms-bootlog .ms-l span { color: #cfcfcf }
+.ms-bootlog .ms-l em {
+  font-style: normal;
+  color: var(--ms-accent);
+}
+@keyframes ms-linin { from { opacity: 0; transform: translateX(-6px) } to { opacity: 1; transform: none } }
+
+/* 中间的大字卡片 */
+.ms-statement {
+  transition: opacity .18s ease, transform .18s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: clamp(10px, 1.6vmin, 20px);
+  padding: 0 8vw;
+}
+/* 换卡：先淡出半拍再换字，两句话不会叠在一起 */
+.ms-statement.ms-swap {
+  opacity: 0;
+  transform: translateY(-7px);
+}
+
+.ms-statement-en {
+  font-family: var(--ms-sans);
+  font-weight: 700;
+  font-size: clamp(19px, 4.1vmin, 46px);
+  line-height: 1.16;
+  letter-spacing: .17em;
+  text-transform: uppercase;
+  color: #f7f7f7;
+  min-height: 1.2em;
+  /* 打字机光标挂在 .ms-typing 上（见文件末尾），这里只保证字不跳 */
+  white-space: pre-wrap;
+}
+.ms-statement-zh {
+  font-family: var(--ms-sans);
+  font-weight: 400;
+  font-size: clamp(12px, 1.9vmin, 18px);
+  letter-spacing: .3em;
+  color: #b9b9b9;
+  min-height: 1.5em;
+  white-space: pre-wrap;
+}
+
+/* 第一幕收掉一切装饰：网格 / 扫描线 / 竖排数据流 / 四角刻度 / 底部进度 */
+#machine-startup-root.ms-root.ms-act1 .ms-grid,
+#machine-startup-root.ms-root.ms-act1 .ms-scanlines,
+#machine-startup-root.ms-root.ms-act1 .ms-rail,
+#machine-startup-root.ms-root.ms-act1 .ms-frame,
+#machine-startup-root.ms-root.ms-act1 .ms-bottom,
+#machine-startup-root.ms-root.ms-act1 .ms-sweep,
+#machine-startup-root.ms-root.ms-act1 .ms-grain {
+  display: none;
+}
+#machine-startup-root.ms-root.ms-act1 .ms-brand-sep,
+#machine-startup-root.ms-root.ms-act1 .ms-brand-sub,
+#machine-startup-root.ms-root.ms-act1 .ms-brand-dot {
+  display: none;
+}
+#machine-startup-root.ms-root.ms-act1 .ms-brand {
+  letter-spacing: .42em;
+  color: #7a7a7a;
+}
+#machine-startup-root.ms-root.ms-act1 .ms-clock { color: #3a3a3a }
+
+/* ── 第二幕：摄像头识别 ─────────────────────────────────────────────────── */
+.ms-scanwrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 16px;
+  width: min(1080px, 92vw);
+  align-items: stretch;
+}
+.ms-card {
+  border: 1px solid var(--ms-line-2);
+  background: linear-gradient(180deg, rgba(12, 12, 12, .92), rgba(0, 0, 0, .92));
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  animation: ms-rise .45s ease both;
+}
+.ms-cardhead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--ms-line);
+  background: rgba(16, 26, 36, .8);
+  font-size: 9.5px;
+  letter-spacing: .26em;
+  text-transform: uppercase;
+  color: var(--ms-fg-mute);
+}
+.ms-cardlabel { color: var(--ms-fg-dim) }
+.ms-cardmeta { margin-left: auto; letter-spacing: .16em }
+.ms-recdot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ms-alert);
+  box-shadow: 0 0 8px var(--ms-alert);
+  animation: ms-blink 1.4s steps(2, end) infinite;
+}
+
+.ms-camview {
+  position: relative;
+  flex: 1 1 auto;
+  aspect-ratio: 4 / 3;
+  max-height: 48vh;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(0deg, #050505 0 2px, #0a0a0a 2px 4px);
+  isolation: isolate;
+}
+.ms-camview video,
+.ms-camview canvas.ms-noise {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  /* 三个可配置项走 CSS 变量；-base 由 JS 内联写入，状态层再覆盖 --ms-sat 之类
+     （内联变量优先级最高，所以状态规则只能另开一层变量名） */
+  filter: saturate(var(--ms-sat, var(--ms-sat-base, 22%))) contrast(var(--ms-con, var(--ms-con-base, 130%))) brightness(var(--ms-bri, var(--ms-bri-base, 82%)));
+  transition: filter .5s ease, opacity .4s ease;
+}
+.ms-camview.ms-mirror video { transform: scaleX(-1) }
+.ms-camview.ms-nocam video { opacity: 0 }
+.ms-camview canvas.ms-noise { opacity: 0; pointer-events: none; filter: none }
+.ms-camview.ms-nocam canvas.ms-noise { opacity: 1 }
+
+/* 模拟头像：没有摄像头时用一张静态图冒充实时画面（自己已经压过冷调+噪点，
+   这里就不要再套 --ms-sat/con/bri 那套滤镜，否则会糊成一片） */
+.ms-camview canvas.ms-avatar {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: none;
+  filter: none;
+}
+.ms-root.ms-sim .ms-camview canvas.ms-avatar { display: block }
+.ms-root.ms-sim .ms-camview video,
+.ms-root.ms-sim .ms-camview canvas.ms-noise { display: none }
+.ms-root.ms-sim .ms-camview { background: #000 }
+/* 识别锁定后，画面「恢复」一点信息量 —— 确认带来的信息增量 */
+.ms-root.st-verified {
+  --ms-sat: 62%;
+  --ms-bri: 92%;
+  --ms-con: 118%;
+}
+
+/* 画面叠加：扫描细纹 + 暗角 */
+.ms-camfx {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, .05) 0 1px, transparent 1px 2px),
+    radial-gradient(ellipse at 50% 50%, transparent 45%, rgba(0, 0, 0, .62) 100%);
+  z-index: 3;
+}
+
+/* 取景框 / HUD 画布
+   ------------------------------------------------------------------------
+   框本身不再用 CSS 画，改成 canvas 逐笔绘制 —— 因为要照抄
+   rosehahah/the-machine 的 web/hud.js：边是虚线（dash 长度随框大小变）、
+   四角是 1.7 倍粗的实心括号、四边中点有朝内刻度、还要 shadowBlur 发光。
+   CSS 的 border-style:dashed 控制不了 dash 长度，做不出那个节奏。 */
+.ms-hud {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9;
+  pointer-events: none;
+  display: block;
+}
+
+/* 眼部黑块马赛克（COD 黑色行动封面那种：一条被切成方块的黑条） */
+.ms-eyes {
+  position: absolute;
+  left: 2%;
+  right: 2%;
+  top: var(--ms-eye-top, 38%);
+  height: var(--ms-eye-h, 15%);
+  display: flex;
+  align-items: stretch;
+  gap: var(--ms-eye-gap, 2px);
+  z-index: 7;
+  pointer-events: none;
+  opacity: 0;
+  /* 档案照里的条会按头部侧倾旋转，绕自身中心转 */
+  transform-origin: 50% 50%;
+  transition: opacity .25s ease;
+  /* 这里原来是 filter: drop-shadow() —— 子元素每帧都在抖，等于每帧重算一次模糊。
+     换成不模糊的 box-shadow 描边，视觉几乎一样，代价是零。 */
+}
+.ms-root.ms-mosaic .ms-eyes { opacity: 1 }
+.ms-eyes i {
+  flex: 1 1 0;
+  background: #000;
+  display: block;
+  transform-origin: 50% 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .55);
+}
+.ms-eyes i.mid { flex-grow: 1.25 }
+.ms-eyes i.thin { flex-grow: .62 }
+/* 抖动：每次跳一小格，像信号锁定不稳 */
+.ms-root.ms-jitter .ms-eyes i {
+  animation: ms-eye-jit var(--jit, 1.7s) steps(1, end) infinite;
+}
+@keyframes ms-eye-jit {
+  /* 1.6.1：只许放大/微移，不再 scaleY<1 —— 条一旦变薄，眼睛就会从上下边缘露出来 */
+  0%, 100% { transform: translateY(0) scaleY(1) }
+  18% { transform: translateY(-4%) scaleY(1.05) }
+  37% { transform: translateY(3%) scaleY(1.01) }
+  58% { transform: translateY(-2%) scaleY(1.03) }
+  76% { transform: translateY(3%) scaleY(1.02) }
+}
+
+.ms-camfoot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 10px;
+  font-size: 9px;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--ms-fg-mute);
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, .75));
+  z-index: 8;
+}
+
+/* 右侧遥测卡 */
+.ms-telcard { padding: 0 }
+.ms-kv {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 11px;
+  font-size: 10px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(22, 34, 46, .55);
+}
+.ms-kv > span {
+  color: var(--ms-fg-mute);
+  min-width: 74px;
+  flex: 0 0 auto;
+}
+.ms-kv > b {
+  font-weight: 400;
+  color: var(--ms-fg);
+  letter-spacing: .12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ms-kv > b.ms-hot { color: var(--ms-accent) }
+.ms-kv > b.ms-warn { color: var(--ms-warn) }
+.ms-kv > b.ms-alert { color: var(--ms-alert) }
+
+.ms-prob {
+  margin: 10px 11px 4px;
+  height: 3px;
+  background: rgba(255, 255, 255, .1);
+  position: relative;
+  overflow: hidden;
+}
+.ms-prob i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: var(--ms-accent);
+  box-shadow: 0 0 8px var(--ms-accent);
+  transition: width .3s linear, background .3s;
+}
+.ms-root.st-analyzing .ms-prob i { background: var(--ms-warn); box-shadow: 0 0 8px var(--ms-warn) }
+
+.ms-telog {
+  flex: 1 1 auto;
+  padding: 6px 11px 10px;
+  font-size: 9.5px;
+  line-height: 1.85;
+  letter-spacing: .08em;
+  color: var(--ms-fg-mute);
+  overflow: hidden;
+}
+.ms-telog .ms-l {
+  display: flex;
+  gap: 7px;
+  opacity: 0;
+  animation: ms-linin .2s ease forwards;
+}
+.ms-telog .ms-l b {
+  color: var(--ms-fg-dim);
+  font-weight: 400;
+  flex: 0 0 auto;
+}
+.ms-telog .ms-l span { color: var(--ms-fg) }
+.ms-telog .ms-l em { color: var(--ms-accent); font-style: normal }
+
+/* ── 第三幕：档案比对 ───────────────────────────────────────────────────── */
+.ms-dossier {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: 20px;
+  width: min(760px, 88vw);
+  padding: 18px;
+  border: 1px solid var(--ms-line-2);
+  background: linear-gradient(180deg, rgba(12, 12, 12, .95), rgba(0, 0, 0, .95));
+  animation: ms-rise .4s ease both;
+  position: relative;
+}
+.ms-dossier::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-top: 1px solid var(--ms-accent);
+  opacity: .5;
+  pointer-events: none;
+}
+.ms-dossier-photo {
+  position: relative;
+  aspect-ratio: 1 / 1.14;
+  border: 1px solid var(--ms-line-3);
+  overflow: hidden;
+  background: #050505;
+}
+.ms-dossier-photo canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  filter: saturate(.18) contrast(1.35) brightness(.85);
+}
+.ms-dossier-photo .ms-eyes {
+  left: 6%;
+  right: 6%;
+  /* top / height 沿用 --ms-eye-top / --ms-eye-h，档案照与取景框打同一条码 */
+}
+.ms-dossier-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ms-dossier-tag {
+  font-size: 9.5px;
+  letter-spacing: .3em;
+  text-transform: uppercase;
+  color: var(--ms-accent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ms-dossier-tag::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: linear-gradient(90deg, var(--ms-accent), transparent);
+  opacity: .5;
+}
+.ms-dossier-name {
+  margin: 6px 0 8px;
+  font-size: clamp(20px, 3.4vmin, 34px);
+  font-weight: 400;
+  letter-spacing: .16em;
+  line-height: 1.1;
+  text-transform: uppercase;
+  color: var(--ms-fg);
+  text-shadow: 0 0 20px rgba(255, 255, 255, .3);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ms-dossier .ms-kv { padding-left: 0; padding-right: 0 }
+.ms-dossier .ms-kv > span { min-width: 88px }
+
+/* ── 第四幕：授权 ───────────────────────────────────────────────────────── */
+.ms-grant {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: min(760px, 86vw);
+}
+.ms-grant-bar {
+  width: 100%;
+  height: 3px;
+  background: rgba(255, 255, 255, .12);
+  position: relative;
+  overflow: hidden;
+}
+.ms-grant-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: var(--ms-accent);
+  box-shadow: 0 0 12px var(--ms-accent);
+  animation: ms-fill .55s ease-out both;
+}
+.ms-grant-text {
+  font-size: clamp(24px, 5vmin, 54px);
+  letter-spacing: .26em;
+  padding-left: .26em;
+  text-transform: uppercase;
+  color: var(--ms-accent);
+  text-shadow: 0 0 30px rgba(255, 255, 255, .42);
+  animation: ms-rise .45s ease both;
+}
+.ms-grant-zh {
+  font-size: clamp(11px, 1.5vmin, 15px);
+  letter-spacing: .5em;
+  padding-left: .5em;
+  color: var(--ms-fg-dim);
+  animation: ms-rise .45s .08s ease both;
+}
+
+/* ── 第五幕：揭幕 ───────────────────────────────────────────────────────── */
+.ms-welcome {
+  font-size: clamp(15px, 2.6vmin, 26px);
+  letter-spacing: .3em;
+  text-transform: uppercase;
+  color: var(--ms-fg);
+  text-align: center;
+  line-height: 1.8;
+  animation: ms-rise .4s ease both;
+}
+.ms-welcome em {
+  font-style: normal;
+  color: var(--ms-accent);
+  text-shadow: 0 0 24px rgba(255, 255, 255, .5);
+}
+
+/* ── 字幕 ───────────────────────────────────────────────────────────────── */
+.ms-sub {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 96px;
+  text-align: center;
+  z-index: 5;
+  pointer-events: none;
+  padding: 0 24px;
+}
+.ms-sub-zh {
+  font-family: var(--ms-sans);
+  font-size: clamp(15px, 2.5vmin, 24px);
+  letter-spacing: .34em;
+  padding-left: .34em;
+  color: var(--ms-fg);
+  text-shadow: 0 0 18px rgba(0, 0, 0, .9);
+  min-height: 1.4em;
+}
+.ms-sub-en {
+  margin-top: 7px;
+  font-size: clamp(9px, 1.35vmin, 12px);
+  letter-spacing: .34em;
+  padding-left: .34em;
+  text-transform: uppercase;
+  color: var(--ms-fg-dim);
+  min-height: 1.4em;
+}
+/* 打字机光标：给「正在输入」的那一行挂 .ms-typing，块状光标跟在最后一个字后面 */
+.ms-typing::after {
+  content: "";
+  display: inline-block;
+  width: .46em;
+  height: .96em;
+  margin-left: .16em;
+  background: var(--ms-accent);
+  vertical-align: -.13em;
+  opacity: .9;
+  animation: ms-caret .86s steps(1, end) infinite;
+}
+@keyframes ms-caret { 0%, 49% { opacity: .9 } 50%, 100% { opacity: 0 } }
+@media (prefers-reduced-motion: reduce) {
+  .ms-typing::after { animation: none; opacity: .7 }
+}
+
+/* ── 底部：进度 + 页脚 ──────────────────────────────────────────────────── */
+.ms-bottom {
+  position: absolute;
+  left: 40px;
+  right: 40px;
+  bottom: 30px;
+  z-index: 6;
+}
+.ms-progress {
+  height: 1px;
+  background: rgba(255, 255, 255, .12);
+  position: relative;
+  overflow: hidden;
+}
+.ms-progress i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: var(--ms-accent);
+  box-shadow: 0 0 10px var(--ms-accent);
+  transition: width .2s linear;
+}
+.ms-bottomrow {
+  margin-top: 9px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 9px;
+  letter-spacing: .24em;
+  text-transform: uppercase;
+  color: var(--ms-fg-mute);
+}
+
+/* 左右两侧的冗余数据流（THE MACHINE 的可信度八成来自这里） */
+.ms-rail {
+  position: absolute;
+  top: 96px;
+  bottom: 130px;
+  width: 104px;
+  overflow: hidden;
+  font-size: 8.5px;
+  line-height: 2.1;
+  letter-spacing: .12em;
+  color: rgba(125, 147, 166, .32);
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 18%, #000 82%, transparent);
+  mask-image: linear-gradient(180deg, transparent, #000 18%, #000 82%, transparent);
+  z-index: 3;
+  pointer-events: none;
+}
+.ms-rail-l { left: 40px }
+.ms-rail-r { right: 40px; text-align: right }
+.ms-rail div {
+  animation: ms-railscroll linear infinite;
+  animation-duration: 26s;
+  will-change: transform;
+}
+@keyframes ms-railscroll {
+  from { transform: translateY(0) }
+  to   { transform: translateY(-50%) }
+}
+
+/* ── 窄屏：砍掉两侧数据流与遥测列，只留摄像头 ─────────────────────────── */
+@media (max-width: 980px) {
+  .ms-rail { display: none }
+  .ms-scanwrap { grid-template-columns: 1fr; width: min(560px, 92vw) }
+  .ms-telcard { display: none }
+  .ms-camview { max-height: 40vh }
+  .ms-act { inset: 74px 28px 120px }
+  .ms-top { left: 28px; right: 28px; top: 24px }
+  .ms-bottom { left: 28px; right: 28px; bottom: 24px }
+  .ms-dossier { grid-template-columns: 124px minmax(0, 1fr); gap: 14px }
+}
+@media (max-height: 620px) {
+  .ms-sub { bottom: 78px }
+  .ms-bootlog { display: none }
+}
+
+/* 无障碍：系统开了「减少动态效果」就只留淡入淡出；
+   幕切换直接切、不带位移 —— 位移是最容易引发不适的那一类动效 */
+@media (prefers-reduced-motion: reduce) {
+  #machine-startup-root.ms-root *,
+  #machine-startup-root.ms-root *::before,
+  #machine-startup-root.ms-root *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .ms-act {
+    transition: none !important;
+    transform: none !important;
+  }
+  .ms-camview video { transition: none !important }
+  .ms-grain { display: none }
+}
