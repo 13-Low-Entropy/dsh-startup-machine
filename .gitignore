@@ -1,0 +1,15 @@
+app.asar
+app.asar.camera-backup.json
+*.bak-camera-*
+guard-manifest.json
+guard.log
+package.json.bak-*
+*.bak-*
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+*.tmp
+~$*
